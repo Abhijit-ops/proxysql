@@ -3557,7 +3557,6 @@ handler_again:
 				}
 				NEXT_IMMEDIATE(CONNECTING_SERVER);
 			} else {
-				proxy_warning("TRACE : PROCESSING QUERY\n");
 				MySQL_Data_Stream *myds=mybe->server_myds;
 				MySQL_Connection *myconn=myds->myconn;
 				mybe->server_myds->max_connect_time=0;

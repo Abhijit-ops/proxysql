@@ -280,6 +280,8 @@ bool Names_Updater::verify_variables(MySQL_Session* session, int idx) {
 			!strcmp(session->client_myds->myconn->variables[SQL_CHARACTER_ACTION].value, "3") ||
 			!strcmp(session->client_myds->myconn->variables[SQL_CHARACTER_ACTION].value, "0")) {
 
+		/* verify SQL_CHARACTER_SET variable, if backend value not equal to frontend value then
+		 * status to SETTING_CHARSET */
 		auto ret = session->mysql_variables->verify_generic_variable(
 				&session->mybe->server_myds->myconn->variables[SQL_CHARACTER_SET].hash,
 				&session->mybe->server_myds->myconn->variables[SQL_CHARACTER_SET].value,
@@ -288,6 +290,55 @@ bool Names_Updater::verify_variables(MySQL_Session* session, int idx) {
 				session->client_myds->myconn->variables[SQL_CHARACTER_SET].value,
 				mysql_tracked_variables[idx].status
 				);
+
+		/* status SETTING_CHARSET must be called also when backend is not equal to frontend
+		 * value for the following variables:
+		 * SQL_CHARACTER_SET_RESULTS
+		 * SQL_CHARACTER_SET_CLIENT
+		 * SQL_CHARACTER_SET_CONNECTION
+		 * SQL_COLLATION_CONNECTION
+		 */
+		if (!strcasecmp(session->mysql_variables->client_get_value(SQL_CHARACTER_ACTION), "1")) {
+			if (!ret) {
+				if (session->mysql_variables->client_get_value(SQL_CHARACTER_SET_RESULTS) != NULL &&
+						session->mysql_variables->server_get_value(SQL_CHARACTER_SET_RESULTS) != NULL &&
+						session->mysql_variables->client_get_value(SQL_CHARACTER_SET_CLIENT) != NULL &&
+						session->mysql_variables->server_get_value(SQL_CHARACTER_SET_CLIENT) != NULL &&
+						session->mysql_variables->client_get_value(SQL_CHARACTER_SET_CONNECTION) != NULL &&
+						session->mysql_variables->server_get_value(SQL_CHARACTER_SET_CONNECTION) != NULL &&
+						session->mysql_variables->client_get_value(SQL_COLLATION_CONNECTION) != NULL &&
+						session->mysql_variables->server_get_value(SQL_COLLATION_CONNECTION) != NULL) {
+					if (strcasecmp(session->mysql_variables->client_get_value(SQL_CHARACTER_SET_RESULTS), session->mysql_variables->server_get_value(SQL_CHARACTER_SET_RESULTS)) ||
+							strcasecmp(session->mysql_variables->client_get_value(SQL_CHARACTER_SET_CLIENT), session->mysql_variables->server_get_value(SQL_CHARACTER_SET_CLIENT)) ||
+							strcasecmp(session->mysql_variables->client_get_value(SQL_CHARACTER_SET_CONNECTION), session->mysql_variables->server_get_value(SQL_CHARACTER_SET_CONNECTION)) ||
+							strcasecmp(session->mysql_variables->client_get_value(SQL_COLLATION_CONNECTION), session->mysql_variables->server_get_value(SQL_COLLATION_CONNECTION))) {
+						switch(session->status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+							case PROCESSING_QUERY:
+								session->previous_status.push(PROCESSING_QUERY);
+								break;
+							case PROCESSING_STMT_PREPARE:
+								session->previous_status.push(PROCESSING_STMT_PREPARE);
+								break;
+							case PROCESSING_STMT_EXECUTE:
+								session->previous_status.push(PROCESSING_STMT_EXECUTE);
+								break;
+							default:
+								proxy_error("Wrong status %d\n", session->status);
+								assert(0);
+								break;
+						}
+						session->set_status(mysql_tracked_variables[idx].status);
+						ret = true;
+						session->mysql_variables->server_set_value(SQL_CHARACTER_SET_RESULTS, session->mysql_variables->client_get_value(SQL_CHARACTER_SET));
+						session->mysql_variables->server_set_value(SQL_CHARACTER_SET_CLIENT, session->mysql_variables->client_get_value(SQL_CHARACTER_SET));
+						session->mysql_variables->server_set_value(SQL_CHARACTER_SET_CONNECTION, session->mysql_variables->client_get_value(SQL_CHARACTER_SET));
+
+
+					}
+				}
+			}
+		}
+
 
 		/* in case of multiplexing all client variables should be set on server as is.
 		 * for example, there is possibility that character_set_results differ from 'set names' character set.
@@ -374,12 +425,53 @@ bool Charset_Updater::verify_variables(MySQL_Session* session, int idx) {
 		mysql_tracked_variables[idx].status
 	);
 
+	/* status SETTING_CHARSET must be called also when backend is not equal to frontend
+	 * value for the following variables:
+	 * SQL_CHARACTER_SET_RESULTS
+	 * SQL_CHARACTER_SET_CLIENT
+	 * SQL_CHARACTER_SET_CONNECTION
+	 * SQL_COLLATION_CONNECTION
+	 */
+	if (!strcasecmp(session->mysql_variables->client_get_value(SQL_CHARACTER_ACTION), "2")) {
+		if (!ret) {
+			if (session->mysql_variables->client_get_value(SQL_CHARACTER_SET_RESULTS) != NULL &&
+					session->mysql_variables->server_get_value(SQL_CHARACTER_SET_RESULTS) != NULL &&
+					session->mysql_variables->client_get_value(SQL_CHARACTER_SET_CLIENT) != NULL &&
+					session->mysql_variables->server_get_value(SQL_CHARACTER_SET_CLIENT) != NULL ) {
+				if (strcasecmp(session->mysql_variables->client_get_value(SQL_CHARACTER_SET_RESULTS), session->mysql_variables->server_get_value(SQL_CHARACTER_SET_RESULTS)) ||
+						strcasecmp(session->mysql_variables->client_get_value(SQL_CHARACTER_SET_CLIENT), session->mysql_variables->server_get_value(SQL_CHARACTER_SET_CLIENT))) {
+					switch(session->status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+						case PROCESSING_QUERY:
+							session->previous_status.push(PROCESSING_QUERY);
+							break;
+						case PROCESSING_STMT_PREPARE:
+							session->previous_status.push(PROCESSING_STMT_PREPARE);
+							break;
+						case PROCESSING_STMT_EXECUTE:
+							session->previous_status.push(PROCESSING_STMT_EXECUTE);
+							break;
+						default:
+							proxy_error("Wrong status %d\n", session->status);
+							assert(0);
+							break;
+					}
+					session->set_status(mysql_tracked_variables[idx].status);
+					ret = true;
+					session->mysql_variables->client_set_value(SQL_CHARACTER_ACTION, "0");
+					session->mysql_variables->server_set_value(SQL_CHARACTER_SET_RESULTS, session->mysql_variables->client_get_value(SQL_CHARACTER_SET));
+					session->mysql_variables->server_set_value(SQL_CHARACTER_SET_CLIENT, session->mysql_variables->client_get_value(SQL_CHARACTER_SET));
+					return ret;
+				}
+			}
+		}
+	}
+
 	/* if client and server values are different then we are going to execute 'set character set' on backed
 	 * The 'set character set' was executed by client, so we are updating client variables
 	 */
-	if (ret) {
-		session->mysql_variables->client_set_value(SQL_CHARACTER_SET_RESULTS, session->mysql_variables->server_get_value(SQL_CHARACTER_SET));
-		session->mysql_variables->client_set_value(SQL_CHARACTER_SET_CLIENT, session->mysql_variables->server_get_value(SQL_CHARACTER_SET));
+	if (ret && !strcmp(session->client_myds->myconn->variables[SQL_CHARACTER_ACTION].value, "2")) {
+//		session->mysql_variables->client_set_value(SQL_CHARACTER_SET_RESULTS, session->mysql_variables->server_get_value(SQL_CHARACTER_SET));
+//		session->mysql_variables->client_set_value(SQL_CHARACTER_SET_CLIENT, session->mysql_variables->server_get_value(SQL_CHARACTER_SET));
 		return ret;
 	}
 
